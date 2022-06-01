@@ -12,7 +12,7 @@ Specifies the new printer server you want the printers in group policy to point 
 Specify the domain of your Active Directory (e.g., mycompany.com)
 
 .PARAMETER Test
-Test what you're trying to do before deploying
+A poor person's 'whatif'. Outputs what you're about to do. Remove '-test' to actually perform said changes.
 
 .EXAMPLE
 The following example will update the printer GPOs to point to PRINTSERVER02
@@ -28,7 +28,7 @@ param (
     [parameter(Mandatory,
         helpMessage="What is your domain's name? (e.g., contoso.com)")]
     [ValidateNotNullOrEmpty()]
-    [string]$Domain
+    [string]$Domain,
     
     [switch]$test
 )
@@ -80,6 +80,8 @@ if ($NewPrintServer -notmatch $NAMING_SCHEME) {
 
     # Repeat until it matches our criteria
     do {
+        Write-Host -ForegroundColor Yellow "The provided Print Server does not match the current naming scheme of $NAMING_SCHEME."
+
         # Ask the user for a new print server
         $NewPrintServer = Read-Host "Enter the hostname of the print server you want the printers to point to (e.g., $NAMING_SCHEME)"
         # Strip out .mycompany.com if it were given
@@ -116,7 +118,6 @@ if ($PrinterGPOs) {
             
             # If CurrentPrintServer wasn't added, fill it out here
             if (-not ($CurrentPrintServer)) {
-                Write-Host -ForegroundColor Yellow "CurrentPrintServer wasn't given, grabbing that now."
                 $CurrentPrintServer = $($CurrentPrinterPath.split('\')[2])
             }
 
@@ -148,7 +149,7 @@ if ($PrinterGPOs) {
                     }
                 } else {
                     $TestPath = "\\$NewPrintServer\$($CurrentPrinterPath.Split('\')[-1])"
-                    Write-Host -ForegroundColor Yellow "Updating Printer GPO $($Printer.DisplayName)'s to Print Server: $TestPath."
+                    Write-Host -ForegroundColor Yellow "[TEST]Updating Printer GPO $($Printer.DisplayName)'s to Print Server: $TestPath."
                 }
             } else {
                 Write-Host -ForegroundColor Green "GPO $($Printer.DisplayName) is already set to $NewPrintServer!"
