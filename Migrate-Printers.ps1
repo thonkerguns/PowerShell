@@ -1,16 +1,22 @@
 <#
-    .SYNOPSIS
-    Updates a printer's location in Group Policy to point to a different Print Server (e.g., changes \\PRINTSERVER01\Call Center to \\PRINTSERVER02\Call Center).
+.SYNOPSIS
+Updates a printer's location in Group Policy to point to a different Print Server (e.g., changes \\PRINTSERVER01\Call Center to \\PRINTSERVER02\Call Center).
 
-    .DESCRIPTION
-    Retrieves all printer GPO's and updates their shared path to a different print server (e.g., changes \\PRINTSERVER01\Call Center to \\PRINTSERVER01\Call Center)
+.DESCRIPTION
+Retrieves all printer GPO's and updates their shared path to a different print server (e.g., changes \\PRINTSERVER01\Call Center to \\PRINTSERVER01\Call Center)
 
-    .PARAMETER NewPrintServer
-    Specifies the new printer server you want the printers in group policy to point to (e.g., PRINTSERVER02)
+.PARAMETER NewPrintServer
+Specifies the new printer server you want the printers in group policy to point to (e.g., PRINTSERVER02)
 
-    .EXAMPLE
-    The following example will update the printer GPOs to point to PRINTSERVER02
-    PS> .\Migrate-Printers.ps1 -NewPrintServer 'PRINTSERVER02' -domain mycompany.com
+.PARAMETER Domain
+Specify the domain of your Active Directory (e.g., mycompany.com)
+
+.PARAMETER Test
+Test what you're trying to do before deploying
+
+.EXAMPLE
+The following example will update the printer GPOs to point to PRINTSERVER02
+PS> .\Migrate-Printers.ps1 -NewPrintServer 'PRINTSERVER02' -domain mycompany.com
 #>
 [cmdletbinding()]
 param (
@@ -23,6 +29,8 @@ param (
         helpMessage="What is your domain's name? (e.g., contoso.com)")]
     [ValidateNotNullOrEmpty()]
     [string]$Domain
+    
+    [switch]$test
 )
 
 #region Variables
@@ -118,24 +126,30 @@ if ($PrinterGPOs) {
                 Write-Host -ForegroundColor Yellow "GPO $($Printer.DisplayName)'s Print Server is not currently set to $NewPrintServer."
                 Write-Host -ForegroundColor Yellow "Setting GPO $($Printer.DisplayName)'s Print server to $NewPrintServer from $CurrentPrintServer"
                 # Update Printer's Location
-                $PrinterXML.printers.PortPrinter.Properties.path = "\\$NewPrintServer\$($CurrentPrinterPath.Split('\')[-1])"
+                
+                if (-not $Test) {
+                    $PrinterXML.printers.PortPrinter.Properties.path = "\\$NewPrintServer\$($CurrentPrinterPath.Split('\')[-1])"
 
-                # Grab the new Printer Path from the XML file
-                $NewPrinterPath = $PrinterXML.printers.PortPrinter.Properties.path
+                    # Grab the new Printer Path from the XML file
+                    $NewPrinterPath = $PrinterXML.printers.PortPrinter.Properties.path
 
-                # Verify if the XML was updated correctly
-                if ($NewPrinterPath.Contains($NewPrintServer)) {
-                    
-                    try {
-                        $PrinterXML.Save($GPOxmlFile)
-                        Write-Host -ForegroundColor Green "Successfully updated GPO $($Printer.DisplayName)'s Print Server from $CurrentPrintServer to $NewPrintServer"
-                    } catch {
-                        Write-Error "Failed to save XML file for GPO $($Printer.DisplayName)."
+                    # Verify if the XML was updated correctly
+                    if ($NewPrinterPath.Contains($NewPrintServer)) {
+
+                        try {
+                            # Save the XML if everything is ok
+                            $PrinterXML.Save($GPOxmlFile)
+                            Write-Host -ForegroundColor Green "Successfully updated GPO $($Printer.DisplayName)'s Print Server from $CurrentPrintServer to $NewPrintServer"
+                        } catch {
+                            Write-Error "Failed to save XML file for GPO $($Printer.DisplayName)."
+                        }
+                    } else {
+                        Write-Warning "GPO $($Printer.DisplayName) did not update from $CurrentPrintServer to $NewPrintServer."
                     }
                 } else {
-                    Write-Warning "GPO $($Printer.DisplayName) did not update from $CurrentPrintServer to $NewPrintServer."
+                    $TestPath = "\\$NewPrintServer\$($CurrentPrinterPath.Split('\')[-1])"
+                    Write-Host -ForegroundColor Yellow "Updating Printer GPO $($Printer.DisplayName)'s to Print Server: $TestPath."
                 }
-                
             } else {
                 Write-Host -ForegroundColor Green "GPO $($Printer.DisplayName) is already set to $NewPrintServer!"
             }
@@ -143,7 +157,7 @@ if ($PrinterGPOs) {
             Write-Warning "Failed to gather XML file for GPO $($Printer.DisplayName)"
         }
 
-        # Reset CurrentPrintServer as I'm having issues understanding why it's causing issues
+        # Reset CurrentPrintServer
         $CurrentPrintServer = $null
     }
 } else {
