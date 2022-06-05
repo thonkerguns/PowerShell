@@ -114,7 +114,7 @@ function Add-SystemPath {
         
         # If it doesn't exist, let's add it
         if (($CurrentPath -split ';') -notcontains $Path) {
-            # If it doesn't exist for some reason, create the directory
+            
             $NewPath = "$CurrentPath;$Path"
             
             Write-Host -ForegroundColor Yellow "Adding $Path to environment path..."
