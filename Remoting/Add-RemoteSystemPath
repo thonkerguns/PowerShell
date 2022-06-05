@@ -1,0 +1,225 @@
+<#
+.Synopsis
+    A Script that can add System Path's on remote machines.
+.DESCRIPTION
+    A script that utilizes PSSessions to connect to remote computer(s) with provided credentials and validates if the provided $Path exists on said machine before
+    proceeding to add it.
+.PARAMETER Path
+    The Path that requires to be added into System Path
+.PARAMETER ComputerName
+    The name of the computer or computers that require said system path.
+.NOTES
+    Author - Zack
+.EXAMPLE
+    .\Add-RemoteSystemPath.ps1 -Path 'C:\Test' -ComputerName 'Computer1', 'Localhost' -Creds (Get-Credential)
+    
+    The above adds System Path 'C:\Test' to Computer(s) Computer1 & Localhost.
+.LINK
+    https://github.com/thonkerguns/PowerShell
+#>
+[cmdletbinding()]
+param (
+    [parameter(Mandatory,
+        Position=0)]
+        [ValidateScript({Test-Path -Path $_})]
+    [string]$Path,
+    
+    [parameter(Mandatory,
+        Position=1,
+        ValueFromPipelineByPropertyName)]
+    [string[]]$ComputerName,
+
+    [parameter(Mandatory,
+        ValueFromPipeline,
+        Position=2)]
+        [ValidateNotNullOrEmpty()]
+    [System.Management.Automation.PSCredential]$Creds
+)
+function Invoke-LoadRemoteFunctions {
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory,
+            Position=0)]
+        [System.String[]]$Functions,
+
+        [Parameter(Mandatory,
+            Position=1,
+            ValueFromPipeline,
+            ValueFromPipelineByPropertyName)]
+            [ValidateNotNullOrEmpty()]
+        [System.Management.Automation.Runspaces.PSSession]$Session
+    )
+
+    begin {
+        $CommandDefinition = $null
+        $HashTable = @{}
+
+        # Cannot proceed if the session isn't opened
+        if ($Session.State -ne 'Opened') {
+            Write-Warning "Invoke-LoadRemoteFunctions: The provided Session's state is not open. Stopping"
+            break
+        }
+    }
+    Process {
+        # Iterate through each provided function
+        foreach ($Function in $Functions) {
+            # Store the function into command $Command
+            $FoundCommand = Get-Command -Name $Function -ErrorAction SilentlyContinue
+
+            # If the command exists, retrieve the commandtype and its source code
+            if ($FoundCommand) {
+                $CommandDefinition = @"
+                    $($FoundCommand.CommandType) $function {
+                        $($FoundCommand.Definition)
+                    }
+"@
+                # Store the Command & its source code/command type into the hashtable
+                $HashTable.Add($function, $CommandDefinition)
+            } else {
+                Write-Warning "Invoke-LoadRemoteFunctions: Could not find command $Function, skipping."
+            }
+        }
+
+        # Enter the provided remote session and begin loading the commands into the Script Scope
+        try {
+            Invoke-Command -Session $Session -ScriptBlock {
+                # Store the passed hashtable so we can access its data ($using:hashtable[$key] gives an error)
+                $Table = $using:hashtable
+
+                # Iterate through each command and grab said command's definition (aka source code of said function)
+                # This will load the function in the 'Script' scope for remote usage.
+                foreach ($Key in $Table.keys) {
+                    . ([ScriptBlock]::Create($Table[$Key]))
+                }
+            } -ErrorAction Stop
+        } catch {
+            Throw $_
+        }
+    }
+}
+
+function Add-SystemPath {
+    [cmdletbinding()]
+    param (
+        [parameter(Mandatory)]
+            [validatescript({Test-Path -Path $_})]
+        [string]$Path
+    )
+
+    begin {
+        # Grab current Path Environment
+        $CurrentPath = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Session Manager\Environment' -Name PATH).path
+    }
+    process {
+        
+        # If it doesn't exist, let's add it
+        if (($CurrentPath -split ';') -notcontains $Path) {
+            # If it doesn't exist for some reason, create the directory
+            $NewPath = "$CurrentPath;$Path"
+            
+            Write-Host -ForegroundColor Yellow "Adding $Path to environment path..."
+            Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Session Manager\Environment' -Name PATH -Value $NewPath
+            
+            # Retrieve the updated path
+            $CurrentPath = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Session Manager\Environment' -Name PATH).path
+
+            if (($CurrentPath -split ';') -notcontains $Path) {
+                Write-Error "Error adding $Path to system path..."
+                break
+            } else {
+                Write-Host -ForegroundColor Green "Successfully added $Path to System Path, proceeding."
+            }
+        } else {
+            Write-Host -ForegroundColor Green "Path $Path is already added in system path, proceeding."
+        }
+    }
+}
+
+function Initialize-PSSession {
+    [cmdletbinding()]
+    param (
+        [parameter(Mandatory,
+            ValueFromPipelineByPropertyName,
+            Position=0)]
+            [ValidateNotNullOrEmpty()]
+        [string]$ComputerName,
+
+        [parameter(Mandatory,
+            ValueFromPipeline,
+            Position=1)]
+            [ValidateNotNullOrEmpty()]
+        [System.Management.Automation.PSCredential]$Creds
+    )
+
+    begin {
+        # Check if we have an active session
+        $Session = Get-PSSession -ErrorAction SilentlyContinue | Where-Object ComputerName -eq $ComputerName
+    }
+
+    process {
+
+        # If we do not have a remote session, create one
+        if ($null -eq $Session) {
+            Write-Verbose "Initialize-PSSession: We do not have an active PSSession, creating one now."
+            # Try to create a remote session
+            try {
+                $Session = New-PSSession -ComputerName $ComputerName -Credential $Creds -ErrorAction Stop
+                if ($null -ne $Session) {
+                    Write-Verbose "Initialize-PSSession: Successfully created a new session for computer $ComputerName."
+                }
+            } catch [System.Management.Automation.Remoting.PSRemotingTransportException] {
+                Write-Error "Initialize-PSSession: Could not create remote connection due to invalid username and password."
+                break
+            } catch {
+                Write-Error "Initialize-PSSession: Failed to create New-PSSession for Computer $ComputerName."
+                break
+            }
+        } else {
+            # Session exists, let's check the state of it
+            if ($Session.State -eq 'Opened') {
+                Write-Verbose "Initialize-PSSession: Session for computer $ComputerName is still Active."
+            } else {
+                # Session state is not opened, recreating session
+                $Session | Remove-PSSession
+
+                # Try to create a remote session
+                try {
+                    $Session = New-PSSession -ComputerName $ComputerName -Credential $Creds -ErrorAction Stop
+                    if ($null -ne $Session) {
+                        Write-Log "Initialize-PSSession: Successfully removed an inactive session and created a new remote session for computer $ComputerName."
+                    }
+                } catch [System.Management.Automation.Remoting.PSRemotingTransportException] {
+                    Write-Error "Initialize-PSSession: Could not create remote connection due to invalid username and password."
+                    break
+                } catch {
+                    Write-Error "Initialize-PSSession: Failed to create New-PSSession for Computer $ComputerName."
+                    break
+                }
+            }
+        }
+    }
+    end {
+        # Output the session object if it isn't null
+        if ($null -eq $Session -or $Session -eq "") {
+            return $null
+        } else {
+            return $Session
+        }
+    }
+}
+
+# Iterate through each computer
+foreach ($Computer in $ComputerName) {
+    # Create a new PSSession or gather an existing one for said computer
+    $Session = Initialize-PSSession -ComputerName $Computer -Creds $Creds -ErrorAction Stop
+    
+    # Load the function(s) on the remote computer with the provided PSSession
+    Invoke-LoadRemoteFunctions -Functions "Add-SystemPath" -Session $Session
+
+    # Add System Path to the remote computer
+    Invoke-Command -Session $Session -ScriptBlock {
+        Add-SystemPath -Path $using:Path
+    }
+}
+# Remove PSSessions
+Get-PSSession | Remove-PSSession
